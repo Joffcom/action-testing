@@ -9,7 +9,7 @@ on:
         required: true
 
 jobs:
-  tag:
+  scan:
     runs-on: ubuntu-latest
     steps:
     - name: Run npx command
