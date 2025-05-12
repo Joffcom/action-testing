@@ -1,0 +1,16 @@
+name: Test Dispatch Event
+run-name: Testing ${{ github.event.inputs.package }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: The name of the package to check
+        required: true
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run npx command
+      run: npx @n8n/scan-community-package ${{ github.event.inputs.package }}
