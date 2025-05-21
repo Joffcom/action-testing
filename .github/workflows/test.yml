@@ -1,23 +1,82 @@
-name: Test Dispatch Event
-run-name: Testing ${{ github.event.inputs.package }}
+name: Scan, Audit, and Snyk Check
 
 on:
   workflow_dispatch:
     inputs:
-      package:
-        description: The name of the package to check
+      packageName:
+        description: 'The name of the package to scan and audit'
         required: true
+        type: string
       resumeUrl:
-        description: The URL to resume the workflow
+        description: 'Optional webhook URL to send the command output'
         required: false
+        type: string
 
 jobs:
-  scan:
+  scan-audit-snyk:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Run npx command
-      shell: 'script -q -e -c "bash {0}"'
-      run: npx @n8n/scan-community-package ${{ github.event.inputs.package }}
-    - name: Run Audit
-      shell: 'script -q -e -c "bash {0}"'
-      run: npm i ${{ github.event.inputs.package }} && npm audit ${{ github.event.inputs.package }}
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up directories
+        run: |
+          mkdir temp-package
+          mkdir output
+
+      - name: Initialize npm project
+        run: npm init -y
+        working-directory: temp-package
+
+      - name: Install the target package
+        run: npm install ${{ github.event.inputs.packageName }}
+        working-directory: temp-package
+        continue-on-error: true
+
+      - name: Run @n8n/scan-community-package
+        id: scan
+        run: |
+          script -q -c "npx @n8n/scan-community-package '${{ github.event.inputs.packageName }}'" output/scan.txt
+        continue-on-error: true
+
+      - name: Run npm audit
+        id: audit
+        run: |
+          npm audit --json > ../output/audit.json || true
+        working-directory: temp-package
+        continue-on-error: true
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Authenticate with Snyk
+        run: snyk auth "${{ secrets.SNYK_TOKEN }}"
+
+      - name: Run snyk test
+        id: snyk
+        run: |
+          snyk test --json > ../output/snyk.json || echo '{}' > ../output/snyk.json
+        working-directory: temp-package
+        continue-on-error: true
+
+      - name: Combine all outputs into a single JSON
+        run: |
+          scan_output=$(jq -Rs '.' output/scan.txt)
+          audit_output=$(jq '.' output/audit.json)
+          snyk_output=$(jq '.' output/snyk.json)
+          jq -n --argjson scan "$scan_output" \
+                --argjson audit "$audit_output" \
+                --argjson snyk "$snyk_output" \
+                '{scanCommunityPackage: $scan, npmAudit: $audit, snykTest: $snyk}' > output/final_output.json
+
+      - name: Print combined output
+        run: cat output/final_output.json
+
+      - name: Send output to resumeUrl (if provided)
+        if: ${{ github.event.inputs.resumeUrl != '' }}
+        run: |
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            --data-binary @output/final_output.json \
+            "${{ github.event.inputs.resumeUrl }}"
